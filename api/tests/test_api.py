@@ -44,7 +44,8 @@ def test_get_asset_with_points():
     r = client.get("/assets/asset_M101")
     assert r.status_code == 200
     data = r.json()["data"]
-    assert data["machine_type"] == "motor_induction"
+    assert data["config"]["machine_type"] == "motor_induction"
+    assert data["hierarchy"]["plant"] == "Planta 1"
     assert isinstance(data.get("points"), list) and data["points"]
 
 
@@ -199,7 +200,7 @@ def test_seed_complete_forces_complete():
     """seed=complete força modo complete em ativos sem override de cenário."""
     r = client.get("/assets/asset_M101?seed=complete")
     assert r.json()["mode"] == "complete"
-    assert r.json()["data"]["machine_type"] == "motor_induction"
+    assert r.json()["data"]["config"]["machine_type"] == "motor_induction"
 
 
 def test_seed_complete_does_not_override_scenario():

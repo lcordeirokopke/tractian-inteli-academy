@@ -153,7 +153,45 @@ def get_asset(asset_id: str, seed: str | None = Depends(_seed)):
     asset = store.get_asset(asset_id)
     if not asset:
         raise HTTPException(404, "Ativo não encontrado.")
-    asset = {**asset, "points": store.list_points(asset_id)}
+    raw = asset
+    # Agrupa campos de hierarquia/config no formato do contrato OpenAPI (mesmo padrão de get_model)
+    asset = {
+        k: v
+        for k, v in asset.items()
+        if k
+        not in (
+            "plant",
+            "line",
+            "parent_asset_id",
+            "machine_type",
+            "rotation_rpm",
+            "bearing_pn",
+            "bpfo_hz",
+            "bpfi_hz",
+            "bsf_hz",
+            "ftf_hz",
+            "line_frequency_hz",
+            "sensor_status",
+        )
+    }
+    asset["hierarchy"] = {
+        "plant": raw["plant"],
+        "line": raw["line"],
+        "parent_asset_id": raw["parent_asset_id"],
+    }
+    asset["config"] = {
+        "machine_type": raw["machine_type"],
+        "rotation_rpm": raw["rotation_rpm"],
+        "bearing_specs": {
+            "part_number": raw["bearing_pn"],
+            "bpfo_hz": raw["bpfo_hz"],
+            "bpfi_hz": raw["bpfi_hz"],
+            "bsf_hz": raw["bsf_hz"],
+            "ftf_hz": raw["ftf_hz"],
+        },
+        "line_frequency_hz": raw["line_frequency_hz"],
+    }
+    asset["points"] = store.list_points(asset_id)
     mode = _mode_for(asset_id, "asset", seed)
     data, notes = _apply_mode(asset, mode, "asset")
     return envelope(data, mode, notes)

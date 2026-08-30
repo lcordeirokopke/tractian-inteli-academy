@@ -91,12 +91,12 @@ components:
         bearing_specs:
           type: object
           properties:
-            part_number: { type: string, examples: [NU 310] }
-            bpfo_hz: { type: number }
-            bpfi_hz: { type: number }
-            bsf_hz: { type: number }
-            ftf_hz: { type: number }
-        line_frequency_hz: { type: number, examples: [60] }
+            part_number: { type: string, nullable: true, examples: [NU 310] }
+            bpfo_hz: { type: number, nullable: true }
+            bpfi_hz: { type: number, nullable: true }
+            bsf_hz: { type: number, nullable: true }
+            ftf_hz: { type: number, nullable: true }
+        line_frequency_hz: { type: number, nullable: true, examples: [60] }
 
     Baseline:
       type: object
