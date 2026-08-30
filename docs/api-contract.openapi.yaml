@@ -313,7 +313,11 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        '200': { description: Lista de ativos da empresa. }
+        '200':
+          description: Lista de ativos da empresa.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueryEnvelope' }
 
   /users/me:
     get:
@@ -393,7 +397,11 @@ paths:
           in: query
           schema: { type: string, enum: [current, stale, pending, inconclusive] }
       responses:
-        '200': { description: Lista de análises do ativo. }
+        '200':
+          description: Lista de análises do ativo.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueryEnvelope' }
 
   /analyses/{analysisId}:
     get:
@@ -598,7 +606,11 @@ paths:
           in: query
           schema: { type: string, enum: [procedure, glossary, guidance] }
       responses:
-        '200': { description: Documentos relevantes. }
+        '200':
+          description: Documentos relevantes.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueryEnvelope' }
 
   /knowledge/{docId}:
     get:
@@ -611,7 +623,11 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        '200': { description: Documento de conhecimento. }
+        '200':
+          description: Documento de conhecimento.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueryEnvelope' }
 
   # ---- Ações / Escalonamento -------------------------------------------
   /cases/{caseId}/escalate:
