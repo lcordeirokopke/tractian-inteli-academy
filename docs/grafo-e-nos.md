@@ -13,16 +13,21 @@ decisão nem a camada MCP (documentos separados).
 O estado do grafo pai é um `TypedDict` (`SupervisorState`) com, entre outros campos: `case`
 (ticket + contexto), `user_context` (populado pelo node `get_current_user`, nunca lido antes dele
 rodar), `diagnostic_result` (um `DiagnosticOutput` opcional — resumo estruturado, flags de
-qualidade, decisão recomendada, justificativa, evidências de suporte e ação proposta), `decision`,
-`action_result`, `final_response`, e `trace`. O campo `trace` usa o reducer `operator.add` (em vez
-de lista pura) porque tanto o `supervisor` quanto os dois subgrafos escrevem nesse campo em turnos
-diferentes do grafo — sem reducer, cada retorno de subgrafo sobrescreveria o valor anterior em vez
-de concatenar; é o mesmo padrão de `add_messages` em campos de chat, aplicado a um campo de
-auditoria.
+qualidade, decisão recomendada, justificativa, evidências de suporte, ação proposta e um
+`raw_context` embutido, do tipo `DecisionContext` — o dado bruto que alimentou a decisão, para o
+`supervisor` revalidar sem re-chamar MCP), `decision`, `action_result` (`ActionResult` da API
+`{accepted, action_id, message}`, ou um sintético `{"accepted": False, ...}` quando
+`a_permission_check` bloqueia preventivamente), `final_response`, e `trace`. O campo `trace` usa o
+reducer `operator.add` (em vez de lista pura) porque tanto o `supervisor` quanto os dois subgrafos
+escrevem nesse campo em turnos diferentes do grafo — sem reducer, cada retorno de subgrafo
+sobrescreveria o valor anterior em vez de concatenar; é o mesmo padrão de `add_messages` em campos
+de chat, aplicado a um campo de auditoria.
 
 Cada subgrafo compilado (`diagnostic_subgraph`, `action_subgraph`) tem seu próprio schema interno
-(ex.: `DiagnosticState` com `plan`, `collected`, `retry_count`), que **não** vaza para o
-`SupervisorState` do grafo pai.
+(`DiagnosticState` com `plan`, `collected`, `retry_count`; `ActionState` com `action_result`), que
+**não** vaza para o `SupervisorState` do grafo pai. `seed` e `user_id` também não entram como campo
+de nenhum desses schemas — viajam vinculados à sessão MCP no momento da invocação (`run_case`),
+junto com o `x-user-id` que `get_current_user` já usa.
 
 ## 2. Diagrama do grafo
 
@@ -35,7 +40,8 @@ Cada subgrafo compilado (`diagnostic_subgraph`, `action_subgraph`) tem seu próp
                          ┌───────────────┐
                          │  supervisor   │◄────────────────────────┐
                          └───────┬───────┘                         │
-                                 │ (primeira chamada pós-entrada)   │
+                                 │ 1ª chamada:                      │
+                                 │ diagnostic_result is None        │
                                  ▼                                  │
                    ┌─────────────────────────┐                     │
                    │  diagnostic_subgraph     │                     │
@@ -47,20 +53,31 @@ Cada subgrafo compilado (`diagnostic_subgraph`, `action_subgraph`) tem seu próp
                          ┌───────────────┐                          │
                          │  supervisor   │──────────────────────────┘
                          └───┬───┬───┬───┘
-             recommended_decision
+             2ª chamada: recommended_decision
               orientar│  agir │  escalar
                       ▼       ▼       ▼
            ┌───────────────┐ │ ┌──────────────────┐
-           │orient_response│ │ │ escalation_node   │
-           └───────┬───────┘ │ └────────┬──────────┘
-                   ▼          ▼          ▼
-                  END   ┌─────────────┐ END
-                        │action_subgraph│
-                        └──────┬───────┘
-                  accepted=True│ accepted=False / 403
-                        ▼             │
-                       END            └──► escalation_node ──► END
+           │orient_response│ │ │ escalation_node   │◄──────────────┐
+           └───────┬───────┘ │ └────────┬──────────┘                │
+                   ▼          ▼          ▼                          │
+                  END   ┌─────────────┐ END                         │
+                        │action_subgraph│                           │
+                        └──────┬───────┘                            │
+                               │ action_result                      │
+                               ▼                                    │
+                         ┌───────────────┐                          │
+                         │  supervisor   │──────────────────────────┘
+                         └───────┬───────┘  3ª chamada: accepted=False
+                                 │           (falha de permissão)
+                          accepted=True
+                                 ▼
+                                END
 ```
+
+`action_subgraph` **nunca** sai direto para `END` ou `escalation_node` — sempre volta para o
+`supervisor` (3ª chamada), que lê `action_result.accepted` e decide entre encerrar o grafo ou
+rotear para `escalation_node`. Toda a lógica de roteamento condicional fica centralizada num único
+node `Command`-based, em vez de espalhada entre `action_subgraph` e `supervisor`.
 
 ## 3. Mecânica de invocação: subgrafo como node
 
@@ -81,9 +98,10 @@ registradas no MCP client usado dentro dele.
 
 O roteamento do `supervisor` é feito com `Command` (não `add_conditional_edges` puro): o node
 retorna diretamente o próximo destino junto com a atualização de state. A regra que decide esse
-destino (`apply_decision_rule`) roda **duas vezes** no fluxo — uma dentro de `d_evaluator`, outra
-no `supervisor` — como redundância proposital (ver `arquitetura-geral.md`, seção 2.5, e
-`regras-de-decisao.md` para a fórmula completa).
+destino (`apply_decision_rule`) roda **duas vezes** no fluxo — uma dentro de `d_evaluator`, sobre o
+`collected` bruto, outra no `supervisor`, sobre o `raw_context` embutido em `DiagnosticOutput` — como
+redundância proposital (ver `arquitetura-geral.md`, seção 2.5, e `regras-de-decisao.md` para a
+fórmula completa).
 
 ## 4. Nós do grafo
 
@@ -92,18 +110,18 @@ no `supervisor` — como redundância proposital (ver `arquitetura-geral.md`, se
 | Node | Tipo | Responsabilidade |
 |---|---|---|
 | `get_current_user` | Código puro (chamada MCP) | Primeiro node do grafo. Chama `getCurrentUser` e popula `user_context` antes de qualquer checagem de permissão existir. Aresta única e incondicional para `supervisor`. |
-| `supervisor` | Código puro (`apply_decision_rule`) | Único node com lógica de roteamento condicional real. Primeira chamada sempre despacha para `diagnostic_subgraph`. Ao receber `DiagnosticOutput`, aplica a regra de decisão e roteia para `orient_response`, `action_subgraph` ou `escalation_node`. |
-| `orient_response` | **LLM — Gemini 3.5 Flash Lite** | Gera `final_response` parafraseando **apenas** `diagnostic_result.supporting_evidence` — não recebe histórico bruto de mensagens nem qualquer outra fonte de contexto no prompt. Essa restrição é o que torna o grounding verificável. |
-| `escalation_node` | Código puro (chamada MCP) | Chama `escalate_case` via MCP com `justification` montada a partir de `decision_rationale`, e **sempre** formata `final_response` explicando ao cliente o motivo do escalonamento. Também é o ponto de entrada quando `action_subgraph` falha por permissão. |
+| `supervisor` | Código puro (`apply_decision_rule`) | Único node com lógica de roteamento condicional real. 1ª chamada sempre despacha para `diagnostic_subgraph`. Na 2ª chamada, ao receber `DiagnosticOutput`, aplica a regra de decisão e roteia para `orient_response`, `action_subgraph` ou `escalation_node`. Numa 3ª chamada — só ocorre quando a 2ª roteou para `action_subgraph` — lê `action_result.accepted` e decide entre `END` (aceito) ou `escalation_node` (falha de permissão). |
+| `orient_response` | **LLM — Gemini 3.5 Flash Lite** (`langchain-google-genai`) | Gera `final_response` parafraseando **apenas** `diagnostic_result.supporting_evidence` — não recebe histórico bruto de mensagens nem qualquer outra fonte de contexto no prompt. Essa restrição é o que torna o grounding verificável. |
+| `escalation_node` | Código puro (chamada MCP) | Chama `escalate_case` via MCP com `justification` montada a partir de `decision_rationale`, e **sempre** formata `final_response` explicando ao cliente o motivo do escalonamento. Alcançado tanto pela 2ª chamada do `supervisor` (severidade crítica etc.) quanto pela 3ª (falha de permissão em `action_subgraph`) — nunca por uma aresta direta de `action_subgraph`. |
 
 ### 4.2 `diagnostic_subgraph` (subgrafo compilado)
 
 | Sub-node | Tipo | Responsabilidade |
 |---|---|---|
-| `d_planner` | **LLM — kimi-k3**, `structured_output` | Decide quais das 10 tools de leitura chamar e em que ordem. |
+| `d_planner` | **LLM — kimi-k3** (`langchain-openai` → endpoint NVIDIA NIM), `structured_output` | Decide quais das 10 tools de leitura chamar e em que ordem. |
 | `d_executor` | Código puro | Executa o plano via MCP, acumula respostas em `collected`, grava em `trace`. |
-| `d_evaluator` | Código puro | Aplica a regra `DATA_QUALITY_OK`/`BASELINE_TRUSTWORTHY`/`SEVERITY_CRITICAL` (ver `regras-de-decisao.md`) sobre `collected`; decide se falta dado (→ `d_replanner`) ou se já pode fechar `DiagnosticOutput`. |
-| `d_replanner` | **LLM — Gemini 3.7 Flash**, `structured_output` | Recebe todo o `collected` até aqui e decide um plano complementar mais específico (análogo a `d_planner`, mas replanejando em cima do que já foi observado). Só ativa em `mode in {partial, inconclusive}` com `retry_count[tool] == 0`; **não** ativa para `mode in {conflict, unavailable}` — reconsultar a mesma fonte não muda o resultado nesses dois modos. |
+| `d_evaluator` | Código puro | Aplica a regra `DATA_QUALITY_OK`/`BASELINE_TRUSTWORTHY`/`SEVERITY_CRITICAL` (ver `regras-de-decisao.md`) sobre `collected`; monta o `DecisionContext` e decide se falta dado (→ `d_replanner`) ou se já pode fechar `DiagnosticOutput` (com `raw_context` embutido). |
+| `d_replanner` | **LLM — Gemini 3.7 Flash** (`langchain-google-genai`), `structured_output` | Recebe todo o `collected` até aqui e decide um plano complementar mais específico (análogo a `d_planner`, mas replanejando em cima do que já foi observado). Só ativa em `mode in {partial, inconclusive}` com `retry_count[tool] == 0`; **não** ativa para `mode in {conflict, unavailable}` — reconsultar a mesma fonte não muda o resultado nesses dois modos. |
 
 **Fundamentação teórica:** o ciclo `d_planner → d_executor → d_evaluator → d_replanner` é uma
 instância estruturada do padrão **ReAct** (raciocínio intercalado com ação e observação) — cada
@@ -122,7 +140,7 @@ bruto, só a conclusão já resolvida.
 
 | Sub-node | Tipo | Responsabilidade |
 |---|---|---|
-| `a_permission_check` | Código puro | Revalida `PERM_OK(proposed_action)` contra `user_context.permissions` **antes** de chamar a API — segunda barreira, além do 403 que a própria API já retornaria. Se falhar, retorna direto para `supervisor` com flag de erro (roteia para `escalation_node`). |
+| `a_permission_check` | Código puro | Revalida `PERM_OK(proposed_action)` contra `user_context.permissions` **antes** de chamar a API — segunda barreira, além do 403 que a própria API já retornaria. Se falhar, **não** chama `a_justify`/`a_execute`: popula `action_result = {"accepted": False, "reason": "permission_denied", ...}` e o subgrafo encerra, devolvendo isso ao `supervisor` (que decide o roteamento — ver §4.1). |
 | `a_justify` | Código puro | Monta o texto de `justification` (≥ 20 caracteres) a partir de `decision_rationale` + `supporting_evidence` do diagnóstico — nunca texto livre do LLM sem referência ao diagnóstico. |
 | `a_execute` | Código puro (chamada MCP) | Chama a tool de ação via MCP (`update_asset_config`, `reprocess_analysis`, `request_specialist_analysis` ou `request_retraining`). Grava `ActionResult` em `action_result` e em `trace`. |
 

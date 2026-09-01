@@ -50,6 +50,8 @@ opcionalmente, `seed`/`user_id`) e **modo runner/harness** (itera os 16 cenário
 `run_case(case_id, seed=None, user_id=None)`; a estrutura do grafo (nodes, roteamento, regra de
 decisão) é idêntica nos dois modos — o que muda é só como `case_id`/`seed`/`user_id` chegam até
 `run_case`. Mesmo `case_id` + mesmo `seed` produz a mesma trajetória em qualquer um dos dois modos.
+`seed` e `user_id` são vinculados à sessão MCP no momento da invocação (mesmo mecanismo que já leva
+o `x-user-id` até `get_current_user`), não propagados como campo de `SupervisorState`.
 
 ### 2.2 Resolução de identidade — `get_current_user`
 
@@ -68,17 +70,19 @@ não há lógica condicional nessa primeira passagem.
 Dentro de `diagnostic_subgraph`, um ciclo do tipo ReAct (planejar → executar → avaliar →
 replanejar) coleta dados via MCP, avalia sua qualidade/confiabilidade e monta um `DiagnosticOutput`
 estruturado: resumo da análise, flags de qualidade, decisão recomendada
-(`orientar`/`agir`/`escalar`), justificativa ancorada em evidência, e (se aplicável) a ação
-proposta. O detalhamento de cada sub-node e dos modelos usados está em `grafo-e-nos.md`; a lógica
-que decide `orientar`/`agir`/`escalar` está em `regras-de-decisao.md`.
+(`orientar`/`agir`/`escalar`), justificativa ancorada em evidência, ação proposta (se aplicável) e o
+contexto bruto (`raw_context`) que alimentou a decisão — embutido para o `supervisor` revalidar sem
+precisar re-chamar MCP (seção 2.5 abaixo). O detalhamento de cada sub-node e dos modelos usados está
+em `grafo-e-nos.md`; a lógica que decide `orientar`/`agir`/`escalar` está em `regras-de-decisao.md`.
 
 ### 2.5 Segundo despacho do supervisor
 
 Com `diagnostic_result` presente, o `supervisor` revalida a regra de decisão (seção 5 do plano —
-ver `regras-de-decisao.md`) sobre o `DiagnosticOutput` já resumido, e roteia:
+ver `regras-de-decisao.md`) sobre o `raw_context` embutido em `DiagnosticOutput` — o mesmo contexto
+bruto que `d_evaluator` usou, sem re-chamar MCP nem reconstruir campos a partir do resumo — e roteia:
 
 - `orientar` → `orient_response` → `END`
-- `agir` → `action_subgraph`
+- `agir` → `action_subgraph` → (volta ao `supervisor`, 3ª chamada — seção 2.7 abaixo)
 - `escalar` → `escalation_node` → `END`
 
 Essa revalidação é redundância proposital: `d_evaluator` (dentro do diagnóstico) decide com base
@@ -99,8 +103,12 @@ grounding verificável (seção 4 abaixo).
 Dentro de `action_subgraph`: revalidação de permissão (`a_permission_check`, segunda barreira além
 do 403 que a API já retornaria), montagem de justificativa ancorada em evidência (`a_justify`,
 nunca texto livre sem referência ao diagnóstico) e execução da tool de ação via MCP (`a_execute`).
-Se a permissão falhar, o subgrafo retorna ao `supervisor` com uma flag de erro em vez de
-`action_result`, e o caso é reclassificado para `escalar`.
+`action_subgraph` **nunca** sai direto para `END` ou `escalation_node` — sempre volta para o
+`supervisor` (3ª chamada), que lê `action_result.accepted` e decide o destino. Se a permissão
+falhar, `a_permission_check` nem chega a `a_justify`/`a_execute`: popula `action_result =
+{"accepted": False, "reason": "permission_denied", ...}` (reaproveita o campo já existente em
+`SupervisorState`, sem campo `error` separado); o `supervisor` lê `accepted=False` e reclassifica
+o caso para `escalar`.
 
 ### 2.8 Escalonamento (caminho `escalar`, direto ou por falha de permissão)
 
