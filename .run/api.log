@@ -40,3 +40,4 @@ INFO:     127.0.0.1:52086 - "GET /models/mdl_vib_v3?seed=complete HTTP/1.1" 200 
 INFO:     127.0.0.1:52086 - "GET /assets/asset_M102?seed=complete HTTP/1.1" 200 OK
 INFO:     127.0.0.1:52086 - "GET /assets/asset_M102/baseline?seed=complete HTTP/1.1" 200 OK
 INFO:     127.0.0.1:52086 - "GET /assets/asset_M102/analyses?seed=complete HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52297 - "GET /assets/asset_M101/baseline?seed=complete HTTP/1.1" 200 OK
