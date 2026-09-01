@@ -1,4 +1,7 @@
+"""Schemas de estado do grafo LangGraph (TypedDict) — bullet 1 do plano de execução Fase 2.
 
+Ver `case/inteli-tractian-project/plano-execucao-fase2.md`, Estágio 1.
+"""
 
 import operator
 from typing import Annotated, Literal, Optional, TypedDict
@@ -13,6 +16,8 @@ class DecisionContext(TypedDict):
     spectrum: Optional[dict]
     mode: str
     asset_id: str
+    machine_type: str  # asset.config.machine_type — necessário p/ casar model.coverage[machine_type]
+    # no ramo request_retraining de apply_decision_rule (agent/decision_rule.py)
     user_permissions: list[str]
     stop_policy_exhausted: bool
 
