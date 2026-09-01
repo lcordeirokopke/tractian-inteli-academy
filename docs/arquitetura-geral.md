@@ -1,6 +1,6 @@
 # Arquitetura Geral — Visão de Fluxo Fim a Fim
 
-> Documento derivado de `plano-arquitetura.md` (Parte 1, seções 1, 3, 8 e 9). Descreve o fluxo
+> Documento descreve o fluxo
 > completo de execução do agente, do recebimento do ticket até a validação da resposta final, sem
 > entrar no detalhe interno de cada subgrafo (ver `grafo-e-nos.md`), da regra de decisão (ver
 > `regras-de-decisao.md`) ou da camada MCP (ver `camada-mcp-e-erros.md`).
